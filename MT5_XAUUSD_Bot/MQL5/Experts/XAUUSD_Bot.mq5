@@ -3,7 +3,7 @@
 //| XAUUSD. Une ouverture seulement si tout est validé.              |
 //+------------------------------------------------------------------+
 #property copyright   "XAUUSD Bot"
-#property version     "0.6.0"
+#property version     "0.6.1"
 #property description "XAUUSD petit compte. Ouverture seulement si signal, risque et protections passent."
 
 //+------------------------------------------------------------------+
@@ -2126,19 +2126,36 @@ void ManageOpenPositions(const bool atrReady)
 //+------------------------------------------------------------------+
 bool MajorNewsBlocks(string &reason)
   {
-   const datetime now = ServerNow();
+   const datetime now = TimeTradeServer();
    if(now <= 0)
      {
       reason = "heure du serveur indisponible";
       return true;
      }
 
+   static datetime cachedMinute = 0;
+   static bool cachedBlock = true;
+   static string cachedReason = "";
+
+   const datetime minute = now - (now % 60);
+   if(cachedMinute == minute)
+     {
+      reason = cachedReason;
+      return cachedBlock;
+     }
+
    MqlCalendarValue values[];
    const datetime window = (datetime)(InpNewsMinutes * 60);
    ResetLastError();
-   if(!CalendarValueHistory(values, now - window, now + window, NULL, "USD"))
+   const int received = CalendarValueHistory(values, now - window, now + window, NULL, "USD");
+   const int error = GetLastError();
+
+   if(received < 0 || error != 0)
      {
-      reason = "calendrier économique indisponible";
+      cachedMinute = minute;
+      cachedBlock = true;
+      cachedReason = "calendrier économique indisponible, code " + IntegerToString(error);
+      reason = cachedReason;
       return true;
      }
 
@@ -2149,19 +2166,30 @@ bool MajorNewsBlocks(string &reason)
          continue;
 
       MqlCalendarEvent event;
+      ResetLastError();
       if(!CalendarEventById(values[i].event_id, event))
         {
-         reason = "calendrier économique indisponible";
+         cachedMinute = minute;
+         cachedBlock = true;
+         cachedReason = "détail d'annonce indisponible, code " + IntegerToString(GetLastError());
+         reason = cachedReason;
          return true;
         }
 
       if(event.importance == CALENDAR_IMPORTANCE_HIGH)
         {
-         reason = "annonce USD majeure";
+         cachedMinute = minute;
+         cachedBlock = true;
+         cachedReason = "annonce USD majeure";
+         reason = cachedReason;
          return true;
         }
      }
 
+   cachedMinute = minute;
+   cachedBlock = false;
+   cachedReason = "";
+   reason = "";
    return false;
   }
 
@@ -2266,7 +2294,7 @@ void ShowStatus(void)
   {
    const int digits = (int)SymbolInfoInteger(InpSymbol, SYMBOL_DIGITS);
 
-   Comment("XAUUSD_Bot 0.6.0",
+   Comment("XAUUSD_Bot 0.6.1",
            "\nEMA 20 M15 : ", DoubleToString(g_ema20M15, digits),
            "\nEMA 50 M15 : ", DoubleToString(g_ema50M15, digits),
            "\nRSI 14 M15 : ", DoubleToString(g_rsiM15, 2),
@@ -2282,7 +2310,7 @@ void ShowStatus(void)
 //+------------------------------------------------------------------+
 void ShowDataUnavailable(void)
   {
-   Comment("XAUUSD_Bot 0.6.0",
+   Comment("XAUUSD_Bot 0.6.1",
            "\nDonnées indisponibles",
            "\n", g_blockReason,
            "\nAucune entrée tant que les données manquent.");
@@ -2344,9 +2372,9 @@ int OnInit(void)
             " ", AccountInfoString(ACCOUNT_CURRENCY),
             ". Le capital recommandé pour ce réglage est 20.");
 
-   Print("[XAUUSD_Bot][INFO] Version 0.6.0 démarrée sur ", Symbol(),
+   Print("[XAUUSD_Bot][INFO] Version 0.6.1 démarrée sur ", Symbol(),
          ". Une ouverture n'est envoyée que si le signal, le risque et les protections passent.");
-   Comment("XAUUSD_Bot 0.6.0",
+   Comment("XAUUSD_Bot 0.6.1",
            "\nIndicateurs en cours de préparation",
            "\nAucune entrée tant que les indicateurs ne sont pas prêts.");
    return INIT_SUCCEEDED;
