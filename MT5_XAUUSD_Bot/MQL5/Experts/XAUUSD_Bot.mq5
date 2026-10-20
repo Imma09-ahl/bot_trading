@@ -3,7 +3,7 @@
 //| XAUUSD. Une ouverture seulement si tout est validé.              |
 //+------------------------------------------------------------------+
 #property copyright   "XAUUSD Bot"
-#property version     "0.6.1"
+#property version     "0.6.2"
 #property description "XAUUSD petit compte. Ouverture seulement si signal, risque et protections passent."
 
 //+------------------------------------------------------------------+
@@ -20,8 +20,7 @@ input string InpSymbol = "XAUUSD"; // Symbole autorisé
 
 input group "Signal"
 input double InpMaxSpreadPrice   = 0.50; // Spread maximum, en prix
-input int    InpSwingLookback    = 20;   // Bougies M15 pour les swings
-input double InpMaxLevelDistance = 1.50; // Distance max au niveau, en prix
+input int    InpSwingLookback    = 20;   // Bougies M15 conservées pour la lecture
 input double InpMinBodyRatio     = 0.50; // Corps minimum / hauteur
 input double InpMaxAtrPrice      = 5.0;  // ATR M15 maximum, en prix
 input int    InpNewsMinutes      = 30;   // Minutes autour d'une annonce USD majeure
@@ -111,12 +110,6 @@ bool ParametersAreValid(void)
    if(InpSwingLookback < 5)
      {
       Print("[XAUUSD_Bot][ERROR] Le nombre de bougies pour les swings doit être au moins 5.");
-      return false;
-     }
-
-   if(InpMaxLevelDistance <= 0.0)
-     {
-      Print("[XAUUSD_Bot][ERROR] La distance maximale au niveau doit être supérieure à 0.");
       return false;
      }
 
@@ -554,7 +547,7 @@ bool LossAtStop(const ENUM_ORDER_TYPE orderType,
   }
 
 //+------------------------------------------------------------------+
-//| Stop Loss au-delà du niveau, avec la marge ATR.                  |
+//| Stop Loss sous le plus bas, ou au-dessus du plus haut, plus l'ATR.|
 //+------------------------------------------------------------------+
 bool BuildStopLoss(const ENUM_ORDER_TYPE orderType,
                    const double level,
@@ -1210,7 +1203,7 @@ bool OpenTrade(const ENUM_ORDER_TYPE orderType, const SEntryPlan &plan, string &
 //+------------------------------------------------------------------+
 //| Piste d'achat. La première condition manquante devient la raison.|
 //+------------------------------------------------------------------+
-bool EvaluateBuy(MqlRates &bars[], const double closePrice, const int digits, string &line)
+bool EvaluateBuy(MqlRates &bars[], string &line)
   {
    if(g_ema20M15 <= g_ema50M15)
      {
@@ -1221,22 +1214,6 @@ bool EvaluateBuy(MqlRates &bars[], const double closePrice, const int digits, st
    if(g_rsiM15 <= 50.0)
      {
       line = "SIGNAL REJECTED : RSI M15 inférieur ou égal à 50.";
-      return true;
-     }
-
-   double support = 0.0;
-   if(!FindNearestSupport(bars, closePrice, support))
-     {
-      line = "SIGNAL REJECTED : support non identifié.";
-      return true;
-     }
-
-   const double distance = closePrice - support;
-   if(distance > InpMaxLevelDistance)
-     {
-      line = "SIGNAL REJECTED : prix trop loin du support. Distance "
-             + DoubleToString(distance, digits) + ", maximum "
-             + DoubleToString(InpMaxLevelDistance, digits) + ".";
       return true;
      }
 
@@ -1251,7 +1228,7 @@ bool EvaluateBuy(MqlRates &bars[], const double closePrice, const int digits, st
 
    SEntryPlan plan;
    string riskDetail = "";
-   if(!PrepareRisk(ORDER_TYPE_BUY, support, plan, riskDetail))
+   if(!PrepareRisk(ORDER_TYPE_BUY, bars[0].low, plan, riskDetail))
      {
       line = "SIGNAL BUY DETECTED. RISK REJECTED : " + riskDetail + ".";
       return true;
@@ -1277,7 +1254,7 @@ bool EvaluateBuy(MqlRates &bars[], const double closePrice, const int digits, st
 //+------------------------------------------------------------------+
 //| Piste de vente. La première condition manquante devient la raison.|
 //+------------------------------------------------------------------+
-bool EvaluateSell(MqlRates &bars[], const double closePrice, const int digits, string &line)
+bool EvaluateSell(MqlRates &bars[], string &line)
   {
    if(g_ema20M15 >= g_ema50M15)
      {
@@ -1288,22 +1265,6 @@ bool EvaluateSell(MqlRates &bars[], const double closePrice, const int digits, s
    if(g_rsiM15 >= 50.0)
      {
       line = "SIGNAL REJECTED : RSI M15 supérieur ou égal à 50.";
-      return true;
-     }
-
-   double resistance = 0.0;
-   if(!FindNearestResistance(bars, closePrice, resistance))
-     {
-      line = "SIGNAL REJECTED : résistance non identifiée.";
-      return true;
-     }
-
-   const double distance = resistance - closePrice;
-   if(distance > InpMaxLevelDistance)
-     {
-      line = "SIGNAL REJECTED : prix trop loin de la résistance. Distance "
-             + DoubleToString(distance, digits) + ", maximum "
-             + DoubleToString(InpMaxLevelDistance, digits) + ".";
       return true;
      }
 
@@ -1318,7 +1279,7 @@ bool EvaluateSell(MqlRates &bars[], const double closePrice, const int digits, s
 
    SEntryPlan plan;
    string riskDetail = "";
-   if(!PrepareRisk(ORDER_TYPE_SELL, resistance, plan, riskDetail))
+   if(!PrepareRisk(ORDER_TYPE_SELL, bars[0].high, plan, riskDetail))
      {
       line = "SIGNAL SELL DETECTED. RISK REJECTED : " + riskDetail + ".";
       return true;
@@ -1379,10 +1340,10 @@ bool EvaluateClosedBar(string &line)
      }
 
    if(h1Close > g_ema200H1)
-      return EvaluateBuy(m15Bars, m15Bars[0].close, digits, line);
+      return EvaluateBuy(m15Bars, line);
 
    if(h1Close < g_ema200H1)
-      return EvaluateSell(m15Bars, m15Bars[0].close, digits, line);
+      return EvaluateSell(m15Bars, line);
 
    line = "SIGNAL REJECTED : clôture H1 égale à l'EMA 200.";
    return true;
@@ -2294,7 +2255,7 @@ void ShowStatus(void)
   {
    const int digits = (int)SymbolInfoInteger(InpSymbol, SYMBOL_DIGITS);
 
-   Comment("XAUUSD_Bot 0.6.1",
+   Comment("XAUUSD_Bot 0.6.2",
            "\nEMA 20 M15 : ", DoubleToString(g_ema20M15, digits),
            "\nEMA 50 M15 : ", DoubleToString(g_ema50M15, digits),
            "\nRSI 14 M15 : ", DoubleToString(g_rsiM15, 2),
@@ -2310,7 +2271,7 @@ void ShowStatus(void)
 //+------------------------------------------------------------------+
 void ShowDataUnavailable(void)
   {
-   Comment("XAUUSD_Bot 0.6.1",
+   Comment("XAUUSD_Bot 0.6.2",
            "\nDonnées indisponibles",
            "\n", g_blockReason,
            "\nAucune entrée tant que les données manquent.");
@@ -2372,9 +2333,9 @@ int OnInit(void)
             " ", AccountInfoString(ACCOUNT_CURRENCY),
             ". Le capital recommandé pour ce réglage est 20.");
 
-   Print("[XAUUSD_Bot][INFO] Version 0.6.1 démarrée sur ", Symbol(),
+   Print("[XAUUSD_Bot][INFO] Version 0.6.2 démarrée sur ", Symbol(),
          ". Une ouverture n'est envoyée que si le signal, le risque et les protections passent.");
-   Comment("XAUUSD_Bot 0.6.1",
+   Comment("XAUUSD_Bot 0.6.2",
            "\nIndicateurs en cours de préparation",
            "\nAucune entrée tant que les indicateurs ne sont pas prêts.");
    return INIT_SUCCEEDED;
